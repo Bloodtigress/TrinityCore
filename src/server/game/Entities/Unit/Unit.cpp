@@ -502,7 +502,7 @@ void Unit::Heartbeat()
     // SMSG_FLIGHT_SPLINE_SYNC for cyclic splines
     SendFlightSplineSyncUpdate();
 
-    // Trigger heartbeat procs and generic aura behavior such as food emotes
+    // Trigger heartbeat procs and generic aura behavior such as food emotes and invoking aura script hooks
     TriggerAuraHeartbeat();
 
     // Update Vignette position and visibility
@@ -3071,7 +3071,7 @@ void Unit::FinishSpell(CurrentSpellTypes spellType, SpellCastResult result /*= S
         return;
 
     if (spellType == CURRENT_CHANNELED_SPELL)
-        spell->SendChannelUpdate(0);
+        spell->SendChannelUpdate(0, result);
 
     spell->finish(result);
 }

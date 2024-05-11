@@ -883,8 +883,14 @@ int32 Aura::CalcMaxDuration(Unit* caster) const
         maxDuration = -1;
 
     // IsPermanent() checks max duration (which we are supposed to calculate here)
-    if (maxDuration != -1 && modOwner)
-        modOwner->ApplySpellMod(spellInfo, SpellModOp::Duration, maxDuration);
+    if (maxDuration != -1)
+    {
+        if (modOwner)
+            modOwner->ApplySpellMod(spellInfo, SpellModOp::Duration, maxDuration);
+
+        if (spellInfo->IsEmpowerSpell())
+            maxDuration += SPELL_EMPOWER_HOLD_TIME_AT_MAX;
+    }
 
     return maxDuration;
 }
@@ -2066,6 +2072,18 @@ void Aura::CallScriptAfterDispel(DispelInfo* dispelInfo)
     }
 }
 
+void Aura::CallScriptOnHeartbeat()
+{
+    for (AuraScript* script : m_loadedScripts)
+    {
+        script->_PrepareScriptCall(AURA_SCRIPT_HOOK_ON_HEARTBEAT);
+        for (AuraScript::AuraHeartbeatHandler const& onHeartbeat : script->OnHeartbeat)
+            onHeartbeat.Call(script);
+
+        script->_FinishScriptCall();
+    }
+}
+
 bool Aura::CallScriptEffectApplyHandlers(AuraEffect const* aurEff, AuraApplication const* aurApp, AuraEffectHandleModes mode)
 {
     bool preventDefault = false;
@@ -2620,6 +2638,9 @@ void UnitAura::Heartbeat()
 
     // Periodic food and drink emote animation
     HandlePeriodicFoodSpellVisualKit();
+
+    // Invoke the OnHeartbeat AuraScript hook
+    CallScriptOnHeartbeat();
 }
 
 void UnitAura::HandlePeriodicFoodSpellVisualKit()

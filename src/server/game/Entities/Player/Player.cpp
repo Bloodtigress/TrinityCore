@@ -281,6 +281,7 @@ Player::Player(WorldSession* session) : Unit(true), m_sceneMgr(this)
     m_legacyRaidDifficulty = DIFFICULTY_10_N;
 
     m_lastPotionId = 0;
+    m_empowerMinHoldStagePercent = 1.0f;
 
     m_auraBaseFlatMod.fill(0.0f);
     m_auraBasePctMod.fill(1.0f);
@@ -1243,6 +1244,8 @@ uint16 Player::GetChatFlags() const
         tag |= CHAT_FLAG_AFK;
     if (IsDeveloper())
         tag |= CHAT_FLAG_DEV;
+    if (m_activePlayerData->TimerunningSeasonID)
+        tag |= CHAT_FLAG_TIMERUNNING;
 
     return tag;
 }
@@ -2404,6 +2407,7 @@ void Player::InitStatsForLevel(bool reapplyMods)
     SetModRangedHaste(1.0f);
     SetModHasteRegen(1.0f);
     SetModTimeRate(1.0f);
+    SetSpellEmpowerStage(-1);
 
     // reset size before reapply auras
     SetObjectScale(1.0f);
@@ -17642,7 +17646,8 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
 
     struct PlayerLoadData
     {
-        // "SELECT c.guid, account, name, race, class, gender, level, xp, money, inventorySlots, bankSlots, restState, playerFlags, playerFlagsEx, "
+        // "SELECT c.guid, account, name, race, class, gender, level, xp, money, inventorySlots, inventoryBagFlags, bagSlotFlags1, bagSlotFlags2, bagSlotFlags3, bagSlotFlags4, bagSlotFlags5, "
+        // "bankSlots, bankBagFlags, bankBagSlotFlags1, bankBagSlotFlags2, bankBagSlotFlags3, bankBagSlotFlags4, bankBagSlotFlags5, bankBagSlotFlags6, bankBagSlotFlags7, restState, playerFlags, playerFlagsEx, "
         // "position_x, position_y, position_z, map, orientation, taximask, createTime, createMode, cinematic, totaltime, leveltime, rest_bonus, logout_time, is_logout_resting, resettalents_cost, "
         // "resettalents_time, primarySpecialization, trans_x, trans_y, trans_z, trans_o, transguid, extra_flags, summonedPetNumber, at_login, zone, online, death_expire_time, taxi_path, dungeonDifficulty, "
         // "totalKills, todayKills, yesterdayKills, chosenTitle, watchedFaction, drunk, "
@@ -17661,7 +17666,11 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
         uint32 xp;
         uint64 money;
         uint8 inventorySlots;
+        EnumFlag<BagSlotFlags> inventoryBagFlags = BagSlotFlags::None;
+        std::array<BagSlotFlags, 5> bagSlotFlags;
         uint8 bankSlots;
+        EnumFlag<BagSlotFlags> bankBagFlags = BagSlotFlags::None;
+        std::array<BagSlotFlags, 7> bankBagSlotFlags;
         PlayerRestState restState;
         PlayerFlags playerFlags;
         PlayerFlagsEx playerFlagsEx;
@@ -17736,7 +17745,13 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
             xp = fields[i++].GetUInt32();
             money = fields[i++].GetUInt64();
             inventorySlots = fields[i++].GetUInt8();
+            inventoryBagFlags = static_cast<BagSlotFlags>(fields[i++].GetUInt32());
+            for (BagSlotFlags& flags : bagSlotFlags)
+                flags = static_cast<BagSlotFlags>(fields[i++].GetUInt32());
             bankSlots = fields[i++].GetUInt8();
+            bankBagFlags = static_cast<BagSlotFlags>(fields[i++].GetUInt32());
+            for (BagSlotFlags& flags : bankBagSlotFlags)
+                flags = static_cast<BagSlotFlags>(fields[i++].GetUInt32());
             restState = PlayerRestState(fields[i++].GetUInt8());
             playerFlags = PlayerFlags(fields[i++].GetUInt32());
             playerFlagsEx = PlayerFlagsEx(fields[i++].GetUInt32());
@@ -17891,7 +17906,14 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
 
     SetCustomizations(Trinity::Containers::MakeIteratorPair(customizations.begin(), customizations.end()), false);
     SetInventorySlotCount(fields.inventorySlots);
+    SetBackpackAutoSortDisabled(fields.inventoryBagFlags.HasFlag(BagSlotFlags::DisableAutoSort));
+    SetBackpackSellJunkDisabled(fields.inventoryBagFlags.HasFlag(BagSlotFlags::ExcludeJunkSell));
+    for (uint32 bagIndex = 0; bagIndex < fields.bagSlotFlags.size(); ++bagIndex)
+        ReplaceAllBagSlotFlags(bagIndex, fields.bagSlotFlags[bagIndex]);
     SetBankBagSlotCount(fields.bankSlots);
+    SetBankAutoSortDisabled(fields.bankBagFlags.HasFlag(BagSlotFlags::DisableAutoSort));
+    for (uint32 bagIndex = 0; bagIndex < fields.bankBagSlotFlags.size(); ++bagIndex)
+        ReplaceAllBankBagSlotFlags(bagIndex, fields.bankBagSlotFlags[bagIndex]);
     SetNativeGender(fields.gender);
     SetUpdateFieldValue(m_values.ModifyValue(&Player::m_playerData).ModifyValue(&UF::PlayerData::Inebriation), fields.drunk);
     ReplaceAllPlayerFlags(fields.playerFlags);
@@ -20048,7 +20070,27 @@ void Player::SaveToDB(LoginDatabaseTransaction loginTransaction, CharacterDataba
         stmt->setUInt32(index++, GetXP());
         stmt->setUInt64(index++, GetMoney());
         stmt->setUInt8(index++, GetInventorySlotCount());
+        stmt->setUInt32(index++, [&]
+        {
+            BagSlotFlags inventoryFlags = BagSlotFlags::None;
+            if (m_activePlayerData->BackpackAutoSortDisabled)
+                inventoryFlags |= BagSlotFlags::DisableAutoSort;
+            if (m_activePlayerData->BackpackSellJunkDisabled)
+                inventoryFlags |= BagSlotFlags::ExcludeJunkSell;
+            return AsUnderlyingType(inventoryFlags);
+        }());
+        for (uint32 bagSlotFlag : m_activePlayerData->BagSlotFlags)
+            stmt->setUInt32(index++, bagSlotFlag);
         stmt->setUInt8(index++, GetBankBagSlotCount());
+        stmt->setUInt32(index++, [&]
+        {
+            BagSlotFlags inventoryFlags = BagSlotFlags::None;
+            if (m_activePlayerData->BankAutoSortDisabled)
+                inventoryFlags |= BagSlotFlags::DisableAutoSort;
+            return AsUnderlyingType(inventoryFlags);
+        }());
+        for (uint32 bankBagSlotFlag : m_activePlayerData->BankBagSlotFlags)
+            stmt->setUInt32(index++, bankBagSlotFlag);
         stmt->setUInt8(index++, m_activePlayerData->RestInfo[REST_TYPE_XP].StateID);
         stmt->setUInt32(index++, m_playerData->PlayerFlags);
         stmt->setUInt32(index++, m_playerData->PlayerFlagsEx);
@@ -20165,7 +20207,27 @@ void Player::SaveToDB(LoginDatabaseTransaction loginTransaction, CharacterDataba
         stmt->setUInt32(index++, GetXP());
         stmt->setUInt64(index++, GetMoney());
         stmt->setUInt8(index++, GetInventorySlotCount());
+        stmt->setUInt32(index++, [&]
+        {
+            BagSlotFlags inventoryFlags = BagSlotFlags::None;
+            if (m_activePlayerData->BackpackAutoSortDisabled)
+                inventoryFlags |= BagSlotFlags::DisableAutoSort;
+            if (m_activePlayerData->BackpackSellJunkDisabled)
+                inventoryFlags |= BagSlotFlags::ExcludeJunkSell;
+            return AsUnderlyingType(inventoryFlags);
+        }());
+        for (uint32 bagSlotFlag : m_activePlayerData->BagSlotFlags)
+            stmt->setUInt32(index++, bagSlotFlag);
         stmt->setUInt8(index++, GetBankBagSlotCount());
+        stmt->setUInt32(index++, [&]
+        {
+            BagSlotFlags inventoryFlags = BagSlotFlags::None;
+            if (m_activePlayerData->BankAutoSortDisabled)
+                inventoryFlags |= BagSlotFlags::DisableAutoSort;
+            return AsUnderlyingType(inventoryFlags);
+        }());
+        for (uint32 bankBagSlotFlag : m_activePlayerData->BankBagSlotFlags)
+            stmt->setUInt32(index++, bankBagSlotFlag);
         stmt->setUInt8(index++, m_activePlayerData->RestInfo[REST_TYPE_XP].StateID);
         stmt->setUInt32(index++, m_playerData->PlayerFlags);
         stmt->setUInt32(index++, m_playerData->PlayerFlagsEx);
@@ -21641,6 +21703,48 @@ void Player::RemovePet(Pet* pet, PetSaveMode mode, bool returnreagent)
         if (GetGroup())
             SetGroupUpdateFlag(GROUP_UPDATE_FLAG_PET);
     }
+}
+
+void Player::DeletePetFromDB(uint32 petNumber)
+{
+    if (m_activePlayerData->PetStable.has_value())
+    {
+        int32 ufIndex = m_activePlayerData->PetStable->Pets.FindIndexIf([petNumber](UF::StablePetInfo const& p) { return p.PetNumber == petNumber; });
+        if (ufIndex >= 0)
+            RemoveDynamicUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData)
+                .ModifyValue(&UF::ActivePlayerData::PetStable, 0)
+                .ModifyValue(&UF::StableInfo::Pets), ufIndex);
+    }
+
+    if (!m_petStable)
+        return;
+
+    if (Optional<uint32> petIndex = m_petStable->GetCurrentActivePetIndex())
+        if (m_petStable->ActivePets[*petIndex] && m_petStable->ActivePets[*petIndex]->PetNumber == petNumber)
+            m_petStable->CurrentPetIndex.reset();
+
+    auto petNumberPred = [petNumber](Optional<PetStable::PetInfo> const& pet)
+    {
+        return pet && pet->PetNumber == petNumber && pet->Type == HUNTER_PET;
+    };
+
+    bool foundPet = false;
+    auto activeItr = std::ranges::find_if(m_petStable->ActivePets, petNumberPred);
+    if (activeItr != m_petStable->ActivePets.end())
+    {
+        activeItr->reset();
+        foundPet = true;
+    }
+
+    auto stabledItr = std::ranges::find_if(m_petStable->StabledPets, petNumberPred);
+    if (stabledItr != m_petStable->StabledPets.end())
+    {
+        stabledItr->reset();
+        foundPet = true;
+    }
+
+    if (foundPet)
+        Pet::DeleteFromDB(petNumber);
 }
 
 void Player::SendTameFailure(PetTameResult result)
@@ -28825,18 +28929,48 @@ void Player::SetPetSlot(uint32 petNumber, PetSaveMode dstPetSlot)
 
                 if (srcPetIndex >= 0)
                 {
-                    SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData)
+                    PetStableFlags flagToAdd, flagToRemove;
+                    if (IsActivePetSlot(dstPetSlot))
+                    {
+                        flagToAdd = PET_STABLE_ACTIVE;
+                        flagToRemove = PET_STABLE_INACTIVE;
+                    }
+                    else
+                    {
+                        flagToAdd = PET_STABLE_INACTIVE;
+                        flagToRemove = PET_STABLE_ACTIVE;
+                    }
+
+                    auto petSetter = m_values.ModifyValue(&Player::m_activePlayerData)
                         .ModifyValue(&UF::ActivePlayerData::PetStable, 0)
-                        .ModifyValue(&UF::StableInfo::Pets, srcPetIndex)
-                        .ModifyValue(&UF::StablePetInfo::PetSlot), dstPetSlot);
+                        .ModifyValue(&UF::StableInfo::Pets, srcPetIndex);
+
+                    SetUpdateFieldValue(petSetter.ModifyValue(&UF::StablePetInfo::PetSlot), dstPetSlot);
+                    SetUpdateFieldFlagValue(petSetter.ModifyValue(&UF::StablePetInfo::PetFlags), flagToAdd);
+                    RemoveUpdateFieldFlagValue(petSetter.ModifyValue(&UF::StablePetInfo::PetFlags), flagToRemove);
                 }
 
                 if (dstPetIndex >= 0)
                 {
-                    SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData)
+                    PetStableFlags flagToAdd, flagToRemove;
+                    if (IsActivePetSlot(srcPetSlot))
+                    {
+                        flagToAdd = PET_STABLE_ACTIVE;
+                        flagToRemove = PET_STABLE_INACTIVE;
+                    }
+                    else
+                    {
+                        flagToAdd = PET_STABLE_INACTIVE;
+                        flagToRemove = PET_STABLE_ACTIVE;
+                    }
+
+                    auto petSetter = m_values.ModifyValue(&Player::m_activePlayerData)
                         .ModifyValue(&UF::ActivePlayerData::PetStable, 0)
-                        .ModifyValue(&UF::StableInfo::Pets, dstPetIndex)
-                        .ModifyValue(&UF::StablePetInfo::PetSlot), srcPetSlot);
+                        .ModifyValue(&UF::StableInfo::Pets, dstPetIndex);
+
+                    SetUpdateFieldValue(petSetter.ModifyValue(&UF::StablePetInfo::PetSlot), srcPetSlot);
+                    SetUpdateFieldFlagValue(petSetter.ModifyValue(&UF::StablePetInfo::PetFlags), flagToAdd);
+                    RemoveUpdateFieldFlagValue(petSetter.ModifyValue(&UF::StablePetInfo::PetFlags), flagToRemove);
                 }
 
                 sess->SendPetStableResult(StableResult::StableSuccess);
