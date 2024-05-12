@@ -204,13 +204,13 @@ DamageInfo::DamageInfo(SpellNonMeleeDamage const& spellNonMeleeDamage, DamageEff
 
 void DamageInfo::ModifyDamage(int32 amount)
 {
-    amount = std::max(amount, -static_cast<int32>(GetDamage()));
+    amount = std::max(amount, -static_cast<int32>(GetDamage(true)));
     m_damage += amount;
 }
 
 void DamageInfo::AbsorbDamage(uint32 amount)
 {
-    amount = std::min(amount, GetDamage());
+    amount = std::min(amount, GetDamage(true));
     m_absorb += amount;
     m_damage -= amount;
     m_hitMask |= PROC_HIT_ABSORB;
@@ -218,7 +218,7 @@ void DamageInfo::AbsorbDamage(uint32 amount)
 
 void DamageInfo::ResistDamage(uint32 amount)
 {
-    amount = std::min(amount, GetDamage());
+    amount = std::min(amount, GetDamage(true));
     m_resist += amount;
     m_damage -= amount;
     if (!m_damage)
@@ -230,7 +230,7 @@ void DamageInfo::ResistDamage(uint32 amount)
 
 void DamageInfo::BlockDamage(uint32 amount)
 {
-    amount = std::min(amount, GetDamage());
+    amount = std::min(amount, GetDamage(true));
     m_block += amount;
     m_damage -= amount;
     m_hitMask |= PROC_HIT_BLOCK;
@@ -239,6 +239,83 @@ void DamageInfo::BlockDamage(uint32 amount)
         m_hitMask |= PROC_HIT_FULL_BLOCK;
         m_hitMask &= ~(PROC_HIT_NORMAL | PROC_HIT_CRITICAL);
     }
+}
+
+
+uint32 DamageInfo::GetDamage() const
+{
+    //return m_damage;
+    float damageTakenFactor = 1.0f;
+    int diffLevel = m_attacker->GetLevel() - m_victim->GetLevel();
+    uint32 expansionForDamageIncreased = MAX_EXPANSIONS - 3;
+
+    if (m_attacker->IsPlayer())
+    {
+        diffLevel = m_attacker->GetLevel() - m_victim->GetLevel();
+        if (diffLevel < 5)
+            damageTakenFactor = 1.0f + 0.0625f * diffLevel;
+        else if (diffLevel < 10)
+            damageTakenFactor = 1.0f + 0.5 * diffLevel;
+        else
+            damageTakenFactor = 16.5f;
+
+        if (m_victim->GetLevel() >= GetMaxLevelForExpansion(expansionForDamageIncreased))
+            damageTakenFactor = 1.0;
+    }
+    if (m_victim->IsPlayer())
+    {
+        diffLevel = m_victim->GetLevel() - m_attacker->GetLevel();
+        damageTakenFactor = std::max(1.0f - 0.1f * diffLevel, 0.1f);
+        if (m_attacker->GetLevel() >= GetMaxLevelForExpansion(expansionForDamageIncreased))
+            damageTakenFactor = 1.0;
+    }
+    if (diffLevel <= 0)
+        damageTakenFactor = 1.0f;
+    if (m_attacker->IsPlayer() && m_victim->IsPlayer())
+        damageTakenFactor = 1.0f;
+    if (damageTakenFactor <= 0)
+        damageTakenFactor = 1.0f;
+
+    return m_damage * damageTakenFactor;
+}
+
+uint32 DamageInfo::GetDamage(bool resistDamage) const
+{
+    if (resistDamage)
+        return m_damage;
+
+    float damageTakenFactor = 1.0f;
+    int diffLevel = m_attacker->GetLevel() - m_victim->GetLevel();
+    uint32 expansionForDamageIncreased = MAX_EXPANSIONS - 3;
+
+    if (m_attacker->IsPlayer())
+    {
+        diffLevel = m_attacker->GetLevel() - m_victim->GetLevel();
+        if (diffLevel < 5)
+            damageTakenFactor = 1.0f + 0.0625f * diffLevel;
+        else if (diffLevel < 10)
+            damageTakenFactor = 1.0f + 0.5 * diffLevel;
+        else
+            damageTakenFactor = 16.5f;
+
+        if (m_victim->GetLevel() >= GetMaxLevelForExpansion(expansionForDamageIncreased))
+            damageTakenFactor = 1.0;
+    }
+    if (m_victim->IsPlayer())
+    {
+        diffLevel = m_victim->GetLevel() - m_attacker->GetLevel();
+        damageTakenFactor = std::max(1.0f - 0.1f * diffLevel, 0.1f);
+        if (m_attacker->GetLevel() >= GetMaxLevelForExpansion(expansionForDamageIncreased))
+            damageTakenFactor = 1.0;
+    }
+    if (diffLevel <= 0)
+        damageTakenFactor = 1.0f;
+    if (m_attacker->IsPlayer() && m_victim->IsPlayer())
+        damageTakenFactor = 1.0f;
+    if (damageTakenFactor <= 0)
+        damageTakenFactor = 1.0f;
+
+    return m_damage * damageTakenFactor;
 }
 
 ProcFlagsHit DamageInfo::GetHitMask() const
@@ -259,6 +336,43 @@ void HealInfo::AbsorbHeal(uint32 amount)
     amount = std::min(amount, GetEffectiveHeal());
     _effectiveHeal -= amount;
     _hitMask |= PROC_HIT_ABSORB;
+}
+
+uint32 HealInfo::GetHeal() const
+{
+    float healDoneFactor = 1.0f;
+    int diffLevel = _healer->GetLevel() - _target->GetLevel();
+    uint32 expansionForDamageIncreased = MAX_EXPANSIONS - 3;
+
+    if (_healer->IsPlayer())
+    {
+        diffLevel = _healer->GetLevel() - _target->GetLevel();
+        if (diffLevel < 5)
+            healDoneFactor = 1.0f + 0.0625f * diffLevel;
+        else if (diffLevel < 10)
+            healDoneFactor = 1.0f + 0.5 * diffLevel;
+        else
+            healDoneFactor = 16.5f;
+
+        if (_target->GetLevel() >= GetMaxLevelForExpansion(expansionForDamageIncreased))
+            healDoneFactor = 1.0;
+    }
+    if (_target->IsPlayer())
+    {
+        diffLevel = _target->GetLevel() - _healer->GetLevel();
+        healDoneFactor = std::max(1.0f - 0.1f * diffLevel, 0.1f);
+        if (_healer->GetLevel() >= GetMaxLevelForExpansion(expansionForDamageIncreased))
+            healDoneFactor = 1.0;
+    }
+    if (diffLevel <= 0)
+        healDoneFactor = 1.0f;
+    if (_healer->IsPlayer() && _target->IsPlayer())
+        healDoneFactor = 1.0f;
+    if (healDoneFactor <= 0)
+        healDoneFactor = 1.0f;
+
+
+    return healDoneFactor * _heal;
 }
 
 uint32 HealInfo::GetHitMask() const

@@ -443,7 +443,8 @@ class TC_GAME_API DamageInfo
         SpellSchoolMask GetSchoolMask() const { return m_schoolMask; }
         DamageEffectType GetDamageType() const { return m_damageType; }
         WeaponAttackType GetAttackType() const { return m_attackType; }
-        uint32 GetDamage() const { return m_damage; }
+        uint32 GetDamage() const;
+        uint32 GetDamage(bool resistDamage) const;
         uint32 GetOriginalDamage() const { return m_originalDamage; }
         uint32 GetAbsorb() const { return m_absorb; }
         uint32 GetResist() const { return m_resist; }
@@ -473,7 +474,7 @@ class TC_GAME_API HealInfo
 
         Unit* GetHealer() const { return _healer; }
         Unit* GetTarget() const { return _target; }
-        uint32 GetHeal() const { return _heal; }
+        uint32 GetHeal() const;
         uint32 GetOriginalHeal() const { return _originalHeal; }
         uint32 GetEffectiveHeal() const { return _effectiveHeal; }
         uint32 GetAbsorb() const { return _absorb; }
