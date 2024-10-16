@@ -480,7 +480,7 @@ void WorldSession::HandleAreaTriggerOpcode(WorldPackets::AreaTrigger::AreaTrigge
     Player* player = GetPlayer();
     if (player->IsInFlight())
     {
-        TC_LOG_DEBUG("network", "HandleAreaTriggerOpcode: Player '{}' {} in flight, ignore Area Trigger ID:{}",
+        TC_LOG_DEBUG("network", "HandleAreaTriggerOpcode: Player '{}' {} in flight, ignore Area Trigger ID: {}",
             player->GetName(), player->GetGUID().ToString(), packet.AreaTriggerID);
         return;
     }
@@ -488,12 +488,12 @@ void WorldSession::HandleAreaTriggerOpcode(WorldPackets::AreaTrigger::AreaTrigge
     AreaTriggerEntry const* atEntry = sAreaTriggerStore.LookupEntry(packet.AreaTriggerID);
     if (!atEntry)
     {
-        TC_LOG_DEBUG("network", "HandleAreaTriggerOpcode: Player '{}' {} send unknown (by DBC) Area Trigger ID:{}",
+        TC_LOG_DEBUG("network", "HandleAreaTriggerOpcode: Player '{}' {} send unknown (by DBC) Area Trigger ID: {}",
             player->GetName(), player->GetGUID().ToString(), packet.AreaTriggerID);
         return;
     }
 
-    if (packet.Entered && !player->IsInAreaTriggerRadius(atEntry))
+    if (packet.Entered != player->IsInAreaTrigger(atEntry))
     {
         TC_LOG_DEBUG("network", "HandleAreaTriggerOpcode: Player '{}' {} too far, ignore Area Trigger ID: {}",
             player->GetName(), player->GetGUID().ToString(), packet.AreaTriggerID);
@@ -508,6 +508,14 @@ void WorldSession::HandleAreaTriggerOpcode(WorldPackets::AreaTrigger::AreaTrigge
 
     if (sScriptMgr->OnAreaTrigger(player, atEntry, packet.Entered))
         return;
+
+    if (atEntry->AreaTriggerActionSetID)
+    {
+        if (packet.Entered)
+            player->UpdateCriteria(CriteriaType::EnterAreaTriggerWithActionSet, atEntry->AreaTriggerActionSetID);
+        else
+            player->UpdateCriteria(CriteriaType::LeaveAreaTriggerWithActionSet, atEntry->AreaTriggerActionSetID);
+    }
 
     if (player->IsAlive() && packet.Entered)
     {
@@ -698,19 +706,17 @@ void WorldSession::HandleUpdateAccountData(WorldPackets::ClientConfig::UserClien
         return;
     }
 
-    ByteBuffer dest(packet.Size, ByteBuffer::Resize{});
+    std::string dest;
+    dest.resize(packet.Size);
 
     uLongf realSize = packet.Size;
-    if (uncompress(dest.contents(), &realSize, packet.CompressedData.contents(), packet.CompressedData.size()) != Z_OK)
+    if (uncompress(reinterpret_cast<Bytef*>(dest.data()), &realSize, packet.CompressedData.contents(), packet.CompressedData.size()) != Z_OK)
     {
         TC_LOG_ERROR("network", "UAD: Failed to decompress account data");
         return;
     }
 
-    std::string adata;
-    dest >> adata;
-
-    SetAccountData(AccountDataType(packet.DataType), packet.Time, adata);
+    SetAccountData(AccountDataType(packet.DataType), packet.Time, dest);
 }
 
 void WorldSession::HandleRequestAccountData(WorldPackets::ClientConfig::RequestAccountData& request)

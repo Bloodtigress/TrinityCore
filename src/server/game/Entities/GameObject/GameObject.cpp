@@ -63,7 +63,12 @@
 void GameObjectTemplate::InitializeQueryData()
 {
     for (uint8 loc = LOCALE_enUS; loc < TOTAL_LOCALES; ++loc)
+    {
+        if (!sWorld->getBoolConfig(CONFIG_LOAD_LOCALES) && loc != DEFAULT_LOCALE)
+            continue;
+
         QueryData[loc] = BuildQueryData(static_cast<LocaleConstant>(loc));
+    }
 }
 
 WorldPacket GameObjectTemplate::BuildQueryData(LocaleConstant loc) const
@@ -696,38 +701,56 @@ public:
         HandleUnitEnterExit(targetList);
     }
 
-    float CalculatePointsPerSecond(std::vector<Player*> const& targetList)
+    float CalculatePointsPerSecond(std::vector<Player*> const& targetList) const
     {
-        int32 delta = 0;
+        int32 hordePlayers = 0;
+        int32 alliancePlayers = 0;
 
-        for (Player* player : targetList)
+        for (Player const* player : targetList)
         {
             if (!player->IsOutdoorPvPActive())
                 continue;
 
             if (player->GetTeamId() == TEAM_HORDE)
-                delta--;
+                hordePlayers++;
             else
-                delta++;
+                alliancePlayers++;
         }
 
-        uint32 minTime = _owner.GetGOInfo()->controlZone.minTime;
-        uint32 maxTime = _owner.GetGOInfo()->controlZone.maxTime;
-        uint32 minSuperiority = _owner.GetGOInfo()->controlZone.minSuperiority;
-        uint32 maxSuperiority = _owner.GetGOInfo()->controlZone.maxSuperiority;
+        int8 factionCoefficient = 0; // alliance superiority = 1; horde superiority = -1
 
-        if (static_cast<uint32>(std::abs(delta)) < minSuperiority)
-            return 0;
+        if (alliancePlayers > hordePlayers)
+            factionCoefficient = 1;
+        else if (hordePlayers > alliancePlayers)
+            factionCoefficient = -1;
 
-        float slope = (static_cast<float>(minTime) - maxTime) / (maxSuperiority - minSuperiority);
-        float intercept = maxTime - slope * minSuperiority;
-        float timeNeeded = slope * std::abs(delta) + intercept;
-        float percentageIncrease = 100.0f / timeNeeded;
+        float const timeNeeded = CalculateTimeNeeded(hordePlayers, alliancePlayers);
+        if (timeNeeded == 0.0f)
+            return 0.0f;
 
-        if (delta < 0)
-            percentageIncrease *= -1;
+        return 100.0f / timeNeeded * static_cast<float>(factionCoefficient);
+    }
 
-        return percentageIncrease;
+    float CalculateTimeNeeded(int32 hordePlayers, int32 alliancePlayers) const
+    {
+        uint32 const uncontestedTime = _owner.GetGOInfo()->controlZone.UncontestedTime;
+        uint32 const delta = std::abs(alliancePlayers - hordePlayers);
+        uint32 const minSuperiority = _owner.GetGOInfo()->controlZone.minSuperiority;
+
+        if (delta < minSuperiority)
+            return 0.0f;
+
+        // return the uncontested time if controlzone is not contested
+        if (uncontestedTime && (hordePlayers == 0 || alliancePlayers == 0))
+            return static_cast<float>(uncontestedTime);
+
+        uint32 const minTime = _owner.GetGOInfo()->controlZone.minTime;
+        uint32 const maxTime = _owner.GetGOInfo()->controlZone.maxTime;
+        uint32 const maxSuperiority = _owner.GetGOInfo()->controlZone.maxSuperiority;
+
+        float const slope = static_cast<float>(minTime - maxTime) / static_cast<float>(std::max<uint32>(maxSuperiority - minSuperiority, 1));
+        float const intercept = static_cast<float>(maxTime) - slope * static_cast<float>(minSuperiority);
+        return slope * static_cast<float>(delta) + intercept;
     }
 
     void HandleUnitEnterExit(std::vector<Player*> const& newTargetList)
@@ -2225,6 +2248,20 @@ void GameObject::Respawn()
     }
 }
 
+bool GameObject::HasConditionalInteraction() const
+{
+    if (GetGOInfo()->GetQuestID())
+        return true;
+
+    if (GetGoType() != GAMEOBJECT_TYPE_AURA_GENERATOR && GetGOInfo()->GetConditionID1())
+        return true;
+
+    if (sObjectMgr->IsGameObjectForQuests(GetEntry()))
+        return true;
+
+    return false;
+}
+
 bool GameObject::CanActivateForPlayer(Player const* target) const
 {
     if (!MeetsInteractCondition(target))
@@ -2285,6 +2322,12 @@ bool GameObject::ActivateToQuest(Player const* target) const
         case GAMEOBJECT_TYPE_GOOBER:
         {
             if (target->GetQuestStatus(GetGOInfo()->goober.questID) == QUEST_STATUS_INCOMPLETE)
+                return true;
+            break;
+        }
+        case GAMEOBJECT_TYPE_GATHERING_NODE:
+        {
+            if (LootTemplates_Gameobject.HaveQuestLootForPlayer(GetGOInfo()->gatheringNode.chestLoot, target))
                 return true;
             break;
         }
@@ -3910,7 +3953,7 @@ void GameObject::EnableCollision(bool enable)
     /*if (enable && !GetMap()->ContainsGameObjectModel(*m_model))
         GetMap()->InsertGameObjectModel(*m_model);*/
 
-    m_model->enableCollision(enable);
+    m_model->EnableCollision(enable);
 }
 
 void GameObject::UpdateModel()
@@ -3949,8 +3992,8 @@ Loot* GameObject::GetLootForPlayer(Player const* player) const
     if (m_personalLoot.empty())
         return m_loot.get();
 
-    if (std::unique_ptr<Loot> const* loot = Trinity::Containers::MapGetValuePtr(m_personalLoot, player->GetGUID()))
-        return loot->get();
+    if (Loot* loot = Trinity::Containers::MapGetValuePtr(m_personalLoot, player->GetGUID()))
+        return loot;
 
     return nullptr;
 }
@@ -4452,11 +4495,29 @@ void GameObject::HandleCustomTypeCommand(GameObjectTypeBase::CustomCommand const
         command.Execute(*m_goTypeImpl);
 }
 
+TeamId GameObject::GetControllingTeam() const
+{
+    if (GetGoType() != GAMEOBJECT_TYPE_CONTROL_ZONE)
+        return TEAM_NEUTRAL;
+
+    GameObjectType::ControlZone const* controlZone = dynamic_cast<GameObjectType::ControlZone const*>(m_goTypeImpl.get());
+    if (!controlZone)
+        return TEAM_NEUTRAL;
+
+    return controlZone->GetControllingTeam();
+}
+
 void GameObject::CreateModel()
 {
     m_model = GameObjectModel::Create(std::make_unique<GameObjectModelOwnerImpl>(this), sWorld->GetDataPath());
-    if (m_model && m_model->isMapObject())
-        SetFlag(GO_FLAG_MAP_OBJECT);
+    if (m_model)
+    {
+        if (m_model->IsMapObject())
+            SetFlag(GO_FLAG_MAP_OBJECT);
+
+        if (GetGoType() == GAMEOBJECT_TYPE_DOOR)
+            m_model->DisableLosBlocking(GetGOInfo()->door.NotLOSBlocking);
+    }
 }
 
 std::string GameObject::GetDebugInfo() const

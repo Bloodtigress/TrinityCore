@@ -338,6 +338,7 @@ class TC_GAME_API GameObject : public WorldObject, public GridObject<GameObject>
 
         bool hasQuest(uint32 quest_id) const override;
         bool hasInvolvedQuest(uint32 quest_id) const override;
+        bool HasConditionalInteraction() const;
         bool CanActivateForPlayer(Player const* target) const;
         bool ActivateToQuest(Player const* target) const;
         void UseDoorOrButton(uint32 time_to_restore = 0, bool alternative = false, Unit* user = nullptr);
@@ -451,6 +452,8 @@ class TC_GAME_API GameObject : public WorldObject, public GridObject<GameObject>
         void HandleCustomTypeCommand(GameObjectTypeBase::CustomCommand const& command) const;
 
         UF::UpdateField<UF::GameObjectData, 0, TYPEID_GAMEOBJECT> m_gameObjectData;
+
+        TeamId GetControllingTeam() const;
 
     protected:
         void CreateModel();

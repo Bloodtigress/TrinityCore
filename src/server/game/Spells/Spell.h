@@ -65,13 +65,17 @@ enum ProcFlagsHit : uint32;
 enum ProcFlagsSpellType : uint32;
 enum SpellTargetCheckTypes : uint8;
 enum SpellTargetObjectTypes : uint8;
-enum SpellValueMod : uint8;
+enum SpellValueMod : int32;
+enum SpellValueModFloat : int32;
 enum TriggerCastFlags : uint32;
 enum WeaponAttackType : uint8;
 
 namespace Trinity
 {
 enum class WorldObjectSpellAreaTargetSearchReason;
+
+template <class Check>
+struct WorldObjectListSearcher;
 }
 
 #define SPELL_CHANNEL_UPDATE_INTERVAL (1 * IN_MILLISECONDS)
@@ -173,7 +177,7 @@ struct SpellLogEffectPowerDrainParams
 {
     ObjectGuid Victim;
     uint32 Points       = 0;
-    uint32 PowerType    = 0;
+    Powers PowerType    = POWER_MANA;
     float Amplitude     = 0;
 };
 
@@ -546,7 +550,7 @@ class TC_GAME_API Spell
 
             return *opt;
         }
-        void ExecuteLogEffectTakeTargetPower(SpellEffectName effect, Unit* target, uint32 powerType, uint32 points, float amplitude);
+        void ExecuteLogEffectTakeTargetPower(SpellEffectName effect, Unit* target, Powers powerType, uint32 points, float amplitude);
         void ExecuteLogEffectExtraAttacks(SpellEffectName effect, Unit* victim, uint32 numAttacks);
         void ExecuteLogEffectDurabilityDamage(SpellEffectName effect, Unit* victim, int32 itemId, int32 amount);
         void ExecuteLogEffectOpenLock(SpellEffectName effect, Object* obj);
@@ -670,6 +674,7 @@ class TC_GAME_API Spell
         void CleanupTargetList();
 
         void SetSpellValue(SpellValueMod mod, int32 value);
+        void SetSpellValue(SpellValueModFloat mod, float value);
 
         Spell** m_selfContainer;                            // pointer to our spell container (if applicable)
 
@@ -690,6 +695,9 @@ class TC_GAME_API Spell
 
         bool IsWithinLOS(WorldObject const* source, WorldObject const* target, bool targetAsSourceLocation, VMAP::ModelIgnoreFlags ignoreFlags) const;
         bool IsWithinLOS(WorldObject const* source, Position const& target, VMAP::ModelIgnoreFlags ignoreFlags) const;
+        void MovePosition(Position& pos, WorldObject const* from, float dist, float angle) const;
+
+        static bool CanIncreaseRangeByMovement(Unit const* unit);
 
     protected:
         bool HasGlobalCooldown() const;
@@ -1037,6 +1045,8 @@ namespace Trinity
 
     TC_GAME_API void SelectRandomInjuredTargets(std::list<WorldObject*>& targets, size_t maxTargets, bool prioritizePlayers, Unit const* prioritizeGroupMembersOf = nullptr);
 }
+
+extern template void Spell::SearchTargets<Trinity::WorldObjectListSearcher<Trinity::WorldObjectSpellAreaTargetCheck>>(Trinity::WorldObjectListSearcher<Trinity::WorldObjectSpellAreaTargetCheck>& searcher, uint32 containerMask, WorldObject* referer, Position const* pos, float radius);
 
 using SpellEffectHandlerFn = void(Spell::*)();
 

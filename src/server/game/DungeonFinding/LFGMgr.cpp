@@ -78,8 +78,8 @@ void LFGMgr::_LoadFromDB(Field* fields, ObjectGuid guid)
 
     SetLeader(guid, ObjectGuid::Create<HighGuid::Player>(fields[0].GetUInt64()));
 
-    uint32 dungeon = fields[18].GetUInt32();
-    uint8 state = fields[19].GetUInt8();
+    uint32 dungeon = fields[19].GetUInt32();
+    uint8 state = fields[20].GetUInt8();
 
     if (!dungeon || !state)
         return;
@@ -1427,7 +1427,7 @@ void LFGMgr::TeleportPlayer(Player* player, bool out, bool fromOpcode /*= false*
 
         player->FinishTaxiFlight();
 
-        if (!player->TeleportTo(mapid, x, y, z, orientation))
+        if (!player->TeleportTo({ .Location = WorldLocation(mapid, x, y, z, orientation), .LfgDungeonsId = dungeon->id }))
             error = LFG_TELEPORT_RESULT_NO_RETURN_LOCATION;
     }
     else
@@ -1537,6 +1537,8 @@ void LFGMgr::FinishDungeon(ObjectGuid gguid, const uint32 dungeonId, Map const* 
             TC_LOG_DEBUG("lfg.dungeon.finish", "Group: {}, Player: {} is in map {} and should be in {} to get reward", gguid.ToString(), guid.ToString(), player->GetMapId(), mapId);
             continue;
         }
+
+        player->UpdateCriteria(CriteriaType::CompletedLFGDungeon, 1);
 
         // Update achievements
         if (dungeon->difficulty == DIFFICULTY_HEROIC)
